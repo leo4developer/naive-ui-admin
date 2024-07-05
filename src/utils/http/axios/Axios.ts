@@ -55,11 +55,12 @@ export class VAxios {
     const transform = this.getTransform();
 
     const { requestOptions } = this.options;
-
+    // 页面请求配置 与 基础配置 合并
     const opt: RequestOptions = Object.assign({}, requestOptions, options);
 
     const { beforeRequestHook, requestCatch, transformRequestData } = transform || {};
     if (beforeRequestHook && isFunction(beforeRequestHook)) {
+      // 请求前处理的钩子 将业务参数整合到axios的config中
       conf = beforeRequestHook(conf, opt);
     }
 
@@ -173,6 +174,7 @@ export class VAxios {
 
       !ignoreCancel && axiosCanceler.addPending(config);
       if (requestInterceptors && isFunction(requestInterceptors)) {
+        /** 请求处理 */
         config = requestInterceptors(config, this.options);
       }
       return config;
