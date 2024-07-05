@@ -27,6 +27,7 @@ export function formatRequestDate(params: Recordable) {
   }
 
   for (const key in params) {
+    /** _isAMomentObject is a flag for moment object 由页面请求添加 */
     if (params[key] && params[key]._isAMomentObject) {
       params[key] = params[key].format(DATE_TIME_FORMAT);
     }
