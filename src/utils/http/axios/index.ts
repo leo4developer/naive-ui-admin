@@ -23,6 +23,64 @@ const urlPrefix = globSetting.urlPrefix || '';
 import router from '@/router';
 import { storage } from '@/utils/Storage';
 
+let isLock = false;
+let refreshSubscribers = [];
+
+//获取Token对象
+function getToken() {
+  return window.localStorage.getItem('ACCESS_TOKEN');
+}
+//push所有请求到数组中
+function subscribeTokenRefresh(cb) {
+  refreshSubscribers.push(cb);
+}
+//刷新请求（refreshSubscribers数组中的请求得到新的token之后会自执行，用新的token去请求数据）
+function onRefreshed(token) {
+  refreshSubscribers.map((cb) => cb(token));
+}
+//刷新token
+function refreshToken(config, token) {
+  return axios
+    .request({
+      url: `刷新token的接口地址`,
+      method: 'POST',
+      headers: { token, clientType: '1' },
+    })
+    .then((res) => {
+      // const userStore = useUserStoreWidthOut();
+      if ('刷新token失效' === res.data.code) {
+        refreshSubscribers = [];
+        /** 如果是登录 */
+        // if (config?.url?.indexOf('/copote-postal-management-uaa-service/auth/code') >= 0) {
+        //   return http.request(config);
+        // }
+        // userStore.setToken('');
+        // window.localStorage.removeItem(ACCESS_TOKEN);
+        // toLogin();
+        return;
+      }
+      const data = res.data.data;
+      const token = data.token;
+      // userStore.setToken(token);
+      // window.localStorage.setItem(ACCESS_TOKEN, token);
+      config.headers.token = data.token;
+
+      //执行数组里的函数,重新发起被挂起的请求
+      onRefreshed(data.token);
+      //清空数组中保存的请求
+      refreshSubscribers = [];
+      return http.request(config);
+    })
+    .catch((err) => {
+      // window.localStorage.removeItem(ACCESS_TOKEN);
+      // toLogin();
+      return Promise.reject(err);
+    })
+    .finally(() => {
+      isLock = false; //释放锁
+    });
+}
+
 /**
  * @description: 数据处理，方便区分多种处理方式
  */
@@ -90,6 +148,36 @@ const transform: AxiosTransform = {
     if (code === ResultEnum.SUCCESS) {
       return result;
     }
+    /** token 失效 */
+    if (code === 'token失效') {
+      //判断当前是否正在请求刷新token
+      const token = getToken();
+      const config = res.config;
+
+      if (!isLock) {
+        isLock = true; //isLock设置true,锁住防止死循环。
+        //使用Promise等待刷新完成返回配置信息
+
+        return refreshToken(config, token);
+      } else {
+        //判断当前url是否是刷新token的请求地址，如果是直接下一步。
+        if (config?.url?.indexOf('xxxx') === -1) {
+          //把请求(token)=>{....}都push到一个数组中
+          const retry = new Promise((resolve) => {
+            //(token) => {...}这个函数就是回调函数
+            subscribeTokenRefresh((token) => {
+              config.headers.token = token;
+              config.headers.clentType = '1';
+              //将请求挂起
+              resolve(http.request(config));
+            });
+          });
+          return retry;
+        } else {
+          return config;
+        }
+      }
+    }
     // 接口请求错误，统一提示错误信息 这里逻辑可以根据项目进行修改
     let errorMsg = message;
     switch (code) {
@@ -97,8 +185,9 @@ const transform: AxiosTransform = {
       case ResultEnum.ERROR:
         $message.error(errorMsg);
         break;
+
       // 登录超时
-      case ResultEnum.TIMEOUT:
+      case 'rerefsh_token失效':
         const LoginName = PageEnum.BASE_LOGIN_NAME;
         const LoginPath = PageEnum.BASE_LOGIN;
         if (router.currentRoute.value?.name === LoginName) return;
@@ -122,16 +211,17 @@ const transform: AxiosTransform = {
     throw new Error(errorMsg);
   },
 
-  // 请求之前处理config
+  // 请求之前处理config  
+  /** options 是 基础配置中的 requestOptions */
   beforeRequestHook: (config, options) => {
     const { apiUrl, joinPrefix, joinParamsToUrl, formatDate, joinTime = true, urlPrefix } = options;
 
     const isUrlStr = isUrl(config.url as string);
-
+    // 不以axios('url',config) 方式调 
     if (!isUrlStr && joinPrefix) {
       config.url = `${urlPrefix}${config.url}`;
     }
-
+    // apiurl: 接口地址 定义在本地环境变量  与上面不会有冲突吗？ =》 不会，urlPrefix是业务线前缀，prefixUrl 是项目前缀
     if (!isUrlStr && apiUrl && isString(apiUrl)) {
       config.url = `${apiUrl}${config.url}`;
     }
@@ -147,8 +237,10 @@ const transform: AxiosTransform = {
         config.params = undefined;
       }
     } else {
-      if (!isString(params)) {
+      
+      if (!isString(params)) { /** 兼容处理各种形式的请求参数 */
         formatDate && formatRequestDate(params);
+        /** 前两个判断条件冗余了 */
         if (Reflect.has(config, 'data') && config.data && Object.keys(config.data).length > 0) {
           config.data = data;
           config.params = params;
